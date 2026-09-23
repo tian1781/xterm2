@@ -53,6 +53,14 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     _array[fromCyclicIndex] = null;
   }
 
+  /// Moves the element at [fromIndex] to [toIndex], keeping it attached.
+  ///
+  /// Prefer this over `list[to] = list[from]` when relocating an element that
+  /// stays in the list: plain assignment leaves the source slot pointing at the
+  /// moved element, so a later write to that slot detaches it — invalidating
+  /// every [CellAnchor] that referenced it.
+  void move(int fromIndex, int toIndex) => _moveChild(fromIndex, toIndex);
+
   /// Gets the element at the specified [index] in the list.
   @pragma('vm:prefer-inline')
   T? _getChild(int index) {

@@ -932,7 +932,11 @@ class Buffer {
 
     for (var i = absoluteMarginTop; i <= absoluteMarginBottom; i++) {
       if (i <= absoluteMarginBottom - count) {
-        lines[i] = lines[i + count];
+        // `lines[i] = lines[i + count]` would leave the source slot pointing at
+        // the same line, so overwriting that slot below detaches the line we
+        // just moved — taking every anchor into it with it. `move` clears the
+        // source slot instead.
+        lines.move(i + count, i);
       } else {
         lines[i] = _newEmptyLine();
       }
