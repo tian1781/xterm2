@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -529,6 +530,7 @@ class TerminalViewState extends State<TerminalView> {
       terminalView: this,
       terminalController: _controller,
       onTapUp: _onTapUp,
+      onSingleTapUp: _onSingleTapUp,
       onTapDown: _onTapDown,
       onSecondaryTapDown:
           widget.onSecondaryTapDown != null ? _onSecondaryTapDown : null,
@@ -626,7 +628,28 @@ class TerminalViewState extends State<TerminalView> {
     return false;
   }
 
-  void _onTapDown(_) {
+  /// A mouse click takes effect as soon as the button goes down.
+  ///
+  /// A touch does not: the tap recognizer reports it 100 ms after the finger
+  /// lands (kPressTimeout), long before a long press (500 ms) or a drag is
+  /// recognized. Opening the soft keyboard there pushes the content up while
+  /// the finger is still down, so the long press then selects whatever row
+  /// has moved under it. Touches are handled in [_onSingleTapUp] instead,
+  /// once the gesture has turned out to be a tap.
+  void _onTapDown(TapDownDetails details) {
+    if (details.kind != PointerDeviceKind.mouse) return;
+    _handleTap();
+  }
+
+  /// A completed single tap by touch or stylus. Long presses and drags never
+  /// get here, and neither do the second and third taps of a double or triple
+  /// tap, so a word or line selected by them is kept.
+  void _onSingleTapUp(TapUpDetails details) {
+    if (details.kind == PointerDeviceKind.mouse) return;
+    _handleTap();
+  }
+
+  void _handleTap() {
     if (_controller.selection != null) {
       _controller.clearSelection();
     } else {

@@ -1657,6 +1657,174 @@ void main() {
     });
   });
 
+  group('TerminalView touch taps', () {
+    late Terminal terminal;
+    late TerminalController controller;
+    late FocusNode focusNode;
+
+    setUp(() {
+      terminal = Terminal(maxLines: 100)..write('hello world');
+      controller = TerminalController();
+      focusNode = FocusNode();
+    });
+
+    tearDown(() {
+      controller.dispose();
+      focusNode.dispose();
+    });
+
+    Future<TerminalViewState> pumpView(WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              controller: controller,
+              focusNode: focusNode,
+            ),
+          ),
+        ),
+      );
+      return tester.state<TerminalViewState>(find.byType(TerminalView));
+    }
+
+    /// Global position of the middle of the cell at [column], [row].
+    Offset cellCenter(TerminalViewState state, int column, int row) {
+      final render = state.renderTerminal;
+      return render.localToGlobal(
+        Offset(
+          render.cellSize.width * (column + 0.5),
+          render.lineHeight * (row + 0.5),
+        ),
+      );
+    }
+
+    bool keyboardShown(TerminalViewState state) =>
+        state.hasInputConnection && binding.testTextInput.isVisible;
+
+    testWidgets('request the keyboard when the finger lifts, not when it lands',
+        (tester) async {
+      final state = await pumpView(tester);
+
+      final gesture = await tester.startGesture(cellCenter(state, 1, 0));
+      // Past kPressTimeout: the tap recognizer has reported the tap down.
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(focusNode.hasFocus, isFalse);
+      expect(keyboardShown(state), isFalse);
+
+      await gesture.up();
+      await tester.pump();
+      expect(focusNode.hasFocus, isTrue);
+      expect(keyboardShown(state), isTrue);
+    });
+
+    testWidgets('a long press selects a word and keeps the keyboard closed', (
+      tester,
+    ) async {
+      final state = await pumpView(tester);
+      // Focused, with the keyboard dismissed by the user.
+      focusNode.requestFocus();
+      await tester.pump();
+      state.closeKeyboard();
+      await tester.pump();
+      expect(keyboardShown(state), isFalse);
+
+      final gesture = await tester.startGesture(cellCenter(state, 7, 0));
+      for (var held = 50; held <= 600; held += 50) {
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(keyboardShown(state), isFalse, reason: 'held for $held ms');
+      }
+      expect(terminal.buffer.getText(controller.selection), 'world');
+
+      await gesture.up();
+      await tester.pump();
+      expect(keyboardShown(state), isFalse);
+      expect(terminal.buffer.getText(controller.selection), 'world');
+    });
+
+    testWidgets('a drag keeps the keyboard closed', (tester) async {
+      terminal.write('\r\n' * 60);
+      final state = await pumpView(tester);
+
+      final gesture = await tester.startGesture(cellCenter(state, 1, 2));
+      await tester.pump(const Duration(milliseconds: 200));
+      for (var i = 0; i < 5; i++) {
+        await gesture.moveBy(const Offset(0, 20));
+        await tester.pump();
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(focusNode.hasFocus, isFalse);
+      expect(keyboardShown(state), isFalse);
+    });
+
+    testWidgets('a tap on a selection clears it on release, without keyboard', (
+      tester,
+    ) async {
+      final state = await pumpView(tester);
+      controller.setSelection(
+        terminal.buffer.createAnchor(6, 0),
+        terminal.buffer.createAnchor(11, 0),
+      );
+
+      final gesture = await tester.startGesture(cellCenter(state, 1, 0));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(controller.selection, isNotNull);
+
+      await gesture.up();
+      await tester.pump();
+      expect(controller.selection, isNull);
+      expect(keyboardShown(state), isFalse);
+    });
+
+    testWidgets('a double tap keeps the word it selected', (tester) async {
+      final state = await pumpView(tester);
+      final position = cellCenter(state, 7, 0);
+
+      await tester.tapAt(position);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(position);
+      await tester.pump();
+
+      expect(terminal.buffer.getText(controller.selection), 'world');
+    });
+
+    testWidgets('a tap reported to a mouse-tracking app still focuses', (
+      tester,
+    ) async {
+      final output = <String>[];
+      terminal
+        ..onOutput = output.add
+        ..write('\x1b[?1000h\x1b[?1006h');
+      final state = await pumpView(tester);
+
+      await tester.tapAt(cellCenter(state, 1, 0));
+      await tester.pump();
+
+      expect(output.where((value) => value.endsWith('M')), hasLength(1));
+      expect(output.where((value) => value.endsWith('m')), hasLength(1));
+      expect(focusNode.hasFocus, isTrue);
+      expect(keyboardShown(state), isTrue);
+    });
+
+    testWidgets('a mouse click still focuses as soon as it lands', (
+      tester,
+    ) async {
+      final state = await pumpView(tester);
+
+      final gesture = await tester.startGesture(
+        cellCenter(state, 1, 0),
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(focusNode.hasFocus, isTrue);
+
+      await gesture.up();
+      await tester.pump();
+    });
+  });
+
   group('TerminalView.textScaler', () {
     testWidgets('works', (tester) async {
       final terminal = Terminal();

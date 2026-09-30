@@ -103,7 +103,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         child: widget.child,
         onTapUp: widget.onTapUp,
         onSingleTapUp: onSingleTapUp,
-        onRepeatedTapUp: onSingleTapUp,
+        onRepeatedTapUp: onRepeatedTapUp,
         onTapDown: onTapDown,
         onSecondaryTapDown: onSecondaryTapDown,
         onSecondaryTapUp: onSecondaryTapUp,
@@ -325,7 +325,21 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void onSingleTapUp(TapUpDetails details) {
-    _tapUp(widget.onSingleTapUp, details, TerminalMouseButton.left);
+    // Like onTapDown, this always calls the supplied callback: the
+    // TerminalView brings the terminal into focus here for touch taps, also
+    // when the tap itself is reported to a mouse-tracking application.
+    _tapUp(
+      widget.onSingleTapUp,
+      details,
+      TerminalMouseButton.left,
+      forceCallback: true,
+    );
+  }
+
+  /// The second or third tap of a double or triple tap: report the release to
+  /// the application, but leave the word or line it selected alone.
+  void onRepeatedTapUp(TapUpDetails details) {
+    _tapUp(null, details, TerminalMouseButton.left);
   }
 
   void onSecondaryTapDown(TapDownDetails details) {
