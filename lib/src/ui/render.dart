@@ -165,6 +165,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     markNeedsLayout();
   }
 
+  /// The text the input method is composing, drawn at the cursor.
+  String? get composingText => _composingText;
   String? _composingText;
   set composingText(String? value) {
     if (value == _composingText) return;

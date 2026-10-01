@@ -11,6 +11,7 @@ import 'package:xterm2/src/ui/shortcut/actions.dart';
 import 'package:xterm2/xterm.dart';
 
 import '../_fixture/_fixture.dart';
+import '../_fixture/fake_input_method.dart';
 
 @GenerateNiceMocks([MockSpec<TerminalInputHandler>()])
 import 'terminal_view_test.mocks.dart';
@@ -1971,7 +1972,9 @@ void main() {
       binding.testTextInput.enterText('é');
       await binding.idle();
 
-      binding.testTextInput.enterText('你好');
+      // The input method's text is kept while a word is typed: this adds
+      // "你好" after the "é".
+      binding.testTextInput.enterText('é你好');
       await binding.idle();
 
       expect(terminalOutput, ['\x1b[233;;233u', '你好']);
@@ -2174,6 +2177,223 @@ void main() {
       expect(terminalOutput.join(), isEmpty);
     });
   });
+
+  group('TerminalView input method', () {
+    late List<String> output;
+    late Terminal terminal;
+    late FakeInputMethod keyboard;
+    var editingStatesTaken = 0;
+
+    setUp(() {
+      output = [];
+      terminal = Terminal(onOutput: output.add);
+      editingStatesTaken = 0;
+    });
+
+    int editingStatesSet() => binding.testTextInput.log
+        .where((call) => call.method == 'TextInput.setEditingState')
+        .length;
+
+    /// The platform takes the editing state the terminal set last, if it set
+    /// one since the last time.
+    void takeEditingState() {
+      final count = editingStatesSet();
+      if (count == editingStatesTaken) return;
+      editingStatesTaken = count;
+      keyboard.value = TextEditingValue.fromJSON(
+        binding.testTextInput.editingState!,
+      );
+    }
+
+    Future<TerminalViewState> pumpView(
+      WidgetTester tester, {
+      bool deleteDetection = true,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TerminalView(
+            terminal,
+            autofocus: true,
+            deleteDetection: deleteDetection,
+          ),
+        ),
+      );
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump();
+      expect(binding.testTextInput.hasAnyClients, isTrue);
+      keyboard = FakeInputMethod();
+      takeEditingState();
+      return tester.state<TerminalViewState>(find.byType(TerminalView));
+    }
+
+    /// Reports [deltas] in one update, then lets the platform take the
+    /// editing state the terminal set in response.
+    Future<void> report(
+      WidgetTester tester,
+      List<Map<String, dynamic>> deltas,
+    ) async {
+      await _sendDeltas(deltas);
+      await tester.pump();
+      takeEditingState();
+    }
+
+    String platformText() => binding.testTextInput.editingState!['text'];
+
+    testWidgets('asks for deltas and no smart punctuation', (tester) async {
+      await pumpView(tester);
+
+      final configuration = binding.testTextInput.setClientArgs!;
+      expect(configuration['enableDeltaModel'], isTrue);
+      expect(configuration['smartDashesType'], '0');
+      expect(configuration['smartQuotesType'], '0');
+      expect(platformText(), '  ');
+    });
+
+    testWidgets('a suggestion that completes the typed word reaches the '
+        'terminal once', (tester) async {
+      // Reported on iOS: typing "Da", picking the suggestion "Dad" and then
+      // "and" left "d" and later "dd " in the terminal.
+      await pumpView(tester);
+
+      await report(tester, [keyboard.type('D')]);
+      await report(tester, [keyboard.type('a')]);
+      await report(tester, [keyboard.replace(2, 4, 'Dad'), keyboard.type(' ')]);
+      // A finished word: the platform's text goes back to the two spaces.
+      expect(editingStatesSet(), 2);
+      expect(platformText(), '  ');
+      await report(tester, [keyboard.type('and ')]);
+      await binding.testTextInput.receiveAction(TextInputAction.newline);
+      // iOS inserts the newline after reporting the action.
+      await report(tester, [keyboard.type('\n')]);
+
+      expect(output, ['D', 'a', 'd ', 'and ', '\r']);
+      expect(platformText(), '  ');
+    });
+
+    testWidgets('Return sends Enter once, also when the newline comes after '
+        'the reset', (tester) async {
+      await pumpView(tester);
+      await report(tester, [keyboard.type('l')]);
+      await report(tester, [keyboard.type('s')]);
+
+      await binding.testTextInput.receiveAction(TextInputAction.newline);
+      expect(platformText(), '  ');
+      // The platform inserted the newline before it took the reset.
+      await report(tester, [keyboard.type('\n')]);
+      await report(tester, [keyboard.type('x')]);
+
+      expect(output, ['l', 's', '\r', 'x']);
+    });
+
+    testWidgets('Backspace reaches the terminal with nothing typed', (
+      tester,
+    ) async {
+      await pumpView(tester);
+
+      await report(tester, [keyboard.backspace()]);
+      // The two spaces are put back after each deletion.
+      expect(editingStatesSet(), 2);
+      expect(platformText(), '  ');
+      await report(tester, [keyboard.backspace()]);
+      expect(editingStatesSet(), 3);
+
+      expect(output, ['\x7f', '\x7f']);
+    });
+
+    testWidgets('draws a composition and sends it when it is committed', (
+      tester,
+    ) async {
+      final state = await pumpView(tester);
+
+      await report(tester, [keyboard.compose('n')]);
+      await report(tester, [keyboard.compose('ni')]);
+      expect(output, isEmpty);
+      expect(state.renderTerminal.composingText, 'ni');
+
+      await report(tester, [keyboard.type('你')]);
+      expect(output, ['你']);
+      expect(state.renderTerminal.composingText, isNull);
+    });
+
+    testWidgets('sends a composed word when the keyboard commits it', (
+      tester,
+    ) async {
+      // Android keyboards compose the word being typed and commit it with
+      // the picked suggestion and a space.
+      await pumpView(tester);
+
+      await report(tester, [keyboard.compose('D')]);
+      await report(tester, [keyboard.compose('Da')]);
+      await report(tester, [keyboard.type('Dad'), keyboard.type(' ')]);
+
+      expect(output, ['Dad ']);
+      expect(editingStatesSet(), 2);
+      expect(platformText(), '  ');
+    });
+
+    testWidgets('input from elsewhere puts the platform text back', (
+      tester,
+    ) async {
+      await pumpView(tester);
+      await report(tester, [keyboard.type('c')]);
+      await report(tester, [keyboard.type('d')]);
+      // What the input method sends does not reset anything.
+      expect(editingStatesSet(), 1);
+
+      // A key on the screen: the shell may complete the word, so the input
+      // method must not keep offering to replace "cd".
+      terminal.keyInput(TerminalKey.tab);
+      expect(editingStatesSet(), 2);
+      expect(platformText(), '  ');
+
+      takeEditingState();
+      await report(tester, [keyboard.type('x')]);
+      expect(output, ['c', 'd', '\t', 'x']);
+    });
+
+    testWidgets('input from elsewhere waits for the composition to end', (
+      tester,
+    ) async {
+      final state = await pumpView(tester);
+      await report(tester, [keyboard.compose('zh')]);
+
+      terminal.keyInput(TerminalKey.tab);
+      expect(editingStatesSet(), 1);
+      expect(state.renderTerminal.composingText, 'zh');
+
+      await report(tester, [keyboard.type('中')]);
+      expect(output, ['\t', '中']);
+      expect(editingStatesSet(), 2);
+      expect(platformText(), '  ');
+    });
+
+    testWidgets('hardware keys go to the terminal and leave the platform '
+        'text alone', (tester) async {
+      await pumpView(tester, deleteDetection: false);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+
+      expect(output, ['a', '\x7f']);
+      expect(editingStatesSet(), 1);
+      expect(platformText(), '');
+    });
+  });
+}
+
+/// Reports [deltas] to the text input client the way the engine does.
+Future<void> _sendDeltas(List<Map<String, dynamic>> deltas) async {
+  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .handlePlatformMessage(
+    SystemChannels.textInput.name,
+    SystemChannels.textInput.codec.encodeMethodCall(
+      MethodCall('TextInputClient.updateEditingStateWithDeltas', <dynamic>[
+        -1,
+        {'deltas': deltas},
+      ]),
+    ),
+    (_) {},
+  );
 }
 
 Future<void> _sendPromptNavigationShortcut(

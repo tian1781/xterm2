@@ -340,6 +340,8 @@ class Terminal
   /// [keyInput], [mouseInput], or [paste].
   void Function(String data)? onOutput;
 
+  final _inputListeners = <void Function()>[];
+
   /// Function that is called when the dimensions of the terminal change.
   void Function(int width, int height, int pixelWidth, int pixelHeight)?
       onResize;
@@ -811,6 +813,29 @@ class Terminal
     _clearSemanticPromptAnchors();
     _hyperlinks.clear();
     _explicitHyperlinkIds.clear();
+    _inputListeners.clear();
+  }
+
+  /// Registers [listener] to be called after [keyInput], [charInput],
+  /// [textInput] or [paste] has sent user input to the underlying program.
+  ///
+  /// [TerminalView] uses it to learn that the line its input method has been
+  /// typing into was changed by something else, such as a hardware key or a
+  /// key on the screen.
+  void addInputListener(void Function() listener) {
+    _inputListeners.add(listener);
+  }
+
+  /// Removes a listener added with [addInputListener].
+  void removeInputListener(void Function() listener) {
+    _inputListeners.remove(listener);
+  }
+
+  void _sendInput(String data) {
+    onOutput?.call(data);
+    for (final listener in List.of(_inputListeners)) {
+      listener();
+    }
   }
 
   /// Sends a key event to the underlying program.
@@ -850,7 +875,7 @@ class Terminal
     );
 
     if (output != null) {
-      onOutput?.call(output);
+      _sendInput(output);
       return true;
     }
 
@@ -875,14 +900,14 @@ class Terminal
       // a(97) ~ z(122)
       if (charCode >= Ascii.a && charCode <= Ascii.z) {
         final output = charCode - Ascii.a + 1;
-        onOutput?.call(String.fromCharCode(output));
+        _sendInput(String.fromCharCode(output));
         return true;
       }
 
       // [(91) ~ _(95)
       if (charCode >= Ascii.openBracket && charCode <= Ascii.underscore) {
         final output = charCode - Ascii.openBracket + 27;
-        onOutput?.call(String.fromCharCode(output));
+        _sendInput(String.fromCharCode(output));
         return true;
       }
     }
@@ -891,7 +916,7 @@ class Terminal
       if (charCode >= Ascii.a && charCode <= Ascii.z) {
         final code = charCode - Ascii.a + 65;
         final input = [0x1b, code];
-        onOutput?.call(String.fromCharCodes(input));
+        _sendInput(String.fromCharCodes(input));
         return true;
       }
     }
@@ -908,7 +933,7 @@ class Terminal
   void textInput(String text) {
     if (_isDisposed) return;
     if (_keyboardActionMode) return;
-    onOutput?.call(text);
+    _sendInput(text);
   }
 
   /// Similar to [textInput], except that when the program tells the terminal
@@ -923,15 +948,15 @@ class Terminal
     if (_keyboardActionMode) return;
     final sanitizedText = _sanitizePasteText(text);
     if (_bracketedPasteMode) {
-      onOutput?.call(_emitter.bracketedPaste(sanitizedText));
+      _sendInput(_emitter.bracketedPaste(sanitizedText));
       return;
     }
 
     if (!sanitizedText.contains('\n')) {
-      onOutput?.call(sanitizedText);
+      _sendInput(sanitizedText);
       return;
     }
-    onOutput?.call(sanitizedText.replaceAll('\n', '\r'));
+    _sendInput(sanitizedText.replaceAll('\n', '\r'));
   }
 
   static const _pasteControlReplacements = {

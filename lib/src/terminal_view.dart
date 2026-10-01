@@ -201,9 +201,11 @@ class TerminalView extends StatefulWidget {
   /// [false] by default.
   final bool alwaysShowCursor;
 
-  /// Workaround to detect delete key for platforms and IMEs that does not
-  /// emit hardware delete event. Prefered on mobile platforms. [false] by
-  /// default.
+  /// Keeps two spaces before the cursor in the input method's text, so that
+  /// Backspace on a soft keyboard reaches the terminal even when nothing has
+  /// been typed yet: keyboards that report a deletion as a change of the text
+  /// rather than as a key event have nothing to delete otherwise. Preferred on
+  /// mobile platforms. [false] by default.
   final bool deleteDetection;
 
   /// Shortcuts for this terminal. This has higher priority than input handler
@@ -244,6 +246,9 @@ class TerminalViewState extends State<TerminalView> {
   final _viewportKey = GlobalKey();
 
   String? _composingText;
+
+  /// Above zero while what the input method typed is being sent.
+  var _sendingTextInput = 0;
 
   int? _hoveredHyperlinkId;
 
@@ -287,6 +292,7 @@ class TerminalViewState extends State<TerminalView> {
     _installColorQuery(widget.terminal);
     _installColorSchemeQuery(widget.terminal);
     _installClipboardHandlers(widget.terminal);
+    widget.terminal.addInputListener(_onTerminalInput);
     HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
     super.initState();
   }
@@ -297,9 +303,11 @@ class TerminalViewState extends State<TerminalView> {
       _removeColorQuery(oldWidget.terminal);
       _removeColorSchemeQuery(oldWidget.terminal);
       _removeClipboardHandlers(oldWidget.terminal);
+      oldWidget.terminal.removeInputListener(_onTerminalInput);
       _installColorQuery(widget.terminal);
       _installColorSchemeQuery(widget.terminal);
       _installClipboardHandlers(widget.terminal);
+      widget.terminal.addInputListener(_onTerminalInput);
     }
     if (oldWidget.focusNode != widget.focusNode) {
       _focusNode.removeListener(_reportFocusChange);
@@ -333,6 +341,7 @@ class TerminalViewState extends State<TerminalView> {
     _removeColorQuery(widget.terminal);
     _removeColorSchemeQuery(widget.terminal);
     _removeClipboardHandlers(widget.terminal);
+    widget.terminal.removeInputListener(_onTerminalInput);
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _focusNode.removeListener(_reportFocusChange);
     if (widget.focusNode == null) {
@@ -483,20 +492,20 @@ class TerminalViewState extends State<TerminalView> {
         inputType: widget.keyboardType,
         keyboardAppearance: widget.keyboardAppearance,
         deleteDetection: widget.deleteDetection,
-        onInsert: _onInsert,
-        onDelete: () {
+        onInsert: (text) => _sendTextInput(() => _onInsert(text)),
+        onDelete: () => _sendTextInput(() {
           _scrollToBottom();
           widget.terminal.keyInput(TerminalKey.backspace);
-        },
+        }),
         onComposing: _onComposing,
-        onAction: (action) {
+        onAction: (action) => _sendTextInput(() {
           _scrollToBottom();
           // Android sends TextInputAction.newline when the user presses the virtual keyboard's enter key.
           if (action == TextInputAction.done ||
               action == TextInputAction.newline) {
             widget.terminal.keyInput(TerminalKey.enter);
           }
-        },
+        }),
         onKeyEvent: _handleKeyEvent,
         readOnly: widget.readOnly,
         child: child,
@@ -673,6 +682,22 @@ class TerminalViewState extends State<TerminalView> {
 
   bool get hasInputConnection {
     return _customTextEditKey.currentState?.hasInputConnection == true;
+  }
+
+  void _sendTextInput(void Function() send) {
+    _sendingTextInput++;
+    try {
+      send();
+    } finally {
+      _sendingTextInput--;
+    }
+  }
+
+  /// The terminal received input. Unless it came from the input method, the
+  /// line the input method was typing into has changed under it.
+  void _onTerminalInput() {
+    if (_sendingTextInput > 0) return;
+    _customTextEditKey.currentState?.resetEditingState();
   }
 
   void _onInsert(String text) {

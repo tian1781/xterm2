@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:xterm2/src/ui/text_input_tracker.dart';
+
 class CustomTextEdit extends StatefulWidget {
   CustomTextEdit({
     super.key,
@@ -50,6 +52,9 @@ class CustomTextEdit extends StatefulWidget {
 
   final Brightness keyboardAppearance;
 
+  /// Keeps two spaces before the cursor in the platform's text, so that the
+  /// keyboard has something to delete when nothing has been typed yet and
+  /// Backspace still reaches the terminal.
   final bool deleteDetection;
 
   final int? viewId;
@@ -58,8 +63,25 @@ class CustomTextEdit extends StatefulWidget {
   CustomTextEditState createState() => CustomTextEditState();
 }
 
-class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
+/// Sends what the platform's input method types to the terminal.
+///
+/// The platform reports its changes as deltas, which [TextInputTracker] turns
+/// into Backspace presses and text for the terminal ([CustomTextEdit.onDelete]
+/// and [CustomTextEdit.onInsert]). The platform's text is kept while a word
+/// is being typed, so that the keyboard can replace the word (a suggestion);
+/// it goes back to the initial value once a word or line is finished, or when
+/// the terminal received input from elsewhere ([resetEditingState]).
+class CustomTextEditState extends State<CustomTextEdit>
+    with TextInputClient, DeltaTextInputClient {
   TextInputConnection? _connection;
+
+  late var _tracker = TextInputTracker(_initEditingState);
+
+  /// A reset that waits for the composition in progress to end.
+  var _resetPending = false;
+
+  /// What [CustomTextEdit.onComposing] was last told.
+  String? _composingText;
 
   @override
   void initState() {
@@ -118,9 +140,25 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     }
   }
 
+  /// Sets the platform's editing value. Its text counts as already received
+  /// by the terminal.
   void setEditingState(TextEditingValue value) {
-    _currentEditingState = value;
-    _connection?.setEditingState(value);
+    _resetPending = false;
+    _tracker.reset(value);
+    if (hasInputConnection) {
+      _connection!.setEditingState(value);
+    }
+  }
+
+  /// Tells that the terminal received input that did not come from the input
+  /// method (a hardware key, an on-screen key, a paste).
+  ///
+  /// What the input method has typed so far may no longer be what the
+  /// terminal shows, so it must not be offered for replacement: the
+  /// platform's text goes back to the initial value, after the composition in
+  /// progress (if any) has ended.
+  void resetEditingState() {
+    _resetWhenPossible();
   }
 
   void setEditableRect(Rect rect, Rect caretRect) {
@@ -141,7 +179,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
-    if (_currentEditingState.composing.isCollapsed) {
+    if (_tracker.value.composing.isCollapsed) {
       return widget.onKeyEvent(focusNode, event);
     }
 
@@ -174,6 +212,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
         autocorrect: false,
         enableSuggestions: false,
         enableIMEPersonalizedLearning: false,
+        // Changes come as deltas: in a whole new value a replacement (a
+        // suggestion, a committed composition) cannot be told from typing.
+        enableDeltaModel: true,
+        // The text is kept while a word is typed, so iOS would see `--` and
+        // straight quotes and turn them into a dash and curly quotes.
+        smartDashesType: SmartDashesType.disabled,
+        smartQuotesType: SmartQuotesType.disabled,
       );
 
       _connection = TextInput.attach(this, config);
@@ -182,7 +227,10 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
       // setEditableRect(Rect.zero, Rect.zero);
 
-      _connection!.setEditingState(_initEditingState);
+      _tracker = TextInputTracker(_initEditingState);
+      _resetPending = false;
+      _connection!.setEditingState(_tracker.value);
+      _updateComposingText();
     }
   }
 
@@ -203,11 +251,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
           selection: TextSelection.collapsed(offset: 0),
         );
 
-  late var _currentEditingState = _initEditingState.copyWith();
-
   @override
   TextEditingValue? get currentTextEditingValue {
-    return _currentEditingState;
+    return _tracker.value;
   }
 
   @override
@@ -216,40 +262,59 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   @override
-  void updateEditingValue(TextEditingValue value) {
-    _currentEditingState = value;
+  void updateEditingValueWithDeltas(List<TextEditingDelta> textEditingDeltas) {
+    _send(_tracker.applyDeltas(textEditingDeltas));
+  }
 
-    // Get input after composing is done
-    if (!_currentEditingState.composing.isCollapsed) {
-      final text = _currentEditingState.text;
-      final composingText = _currentEditingState.composing.textInside(text);
-      widget.onComposing(composingText);
+  /// A whole new value, from a platform that does not report deltas.
+  @override
+  void updateEditingValue(TextEditingValue value) {
+    _send(_tracker.applyValue(value));
+  }
+
+  void _send(List<TextInputEdit> edits) {
+    for (final edit in edits) {
+      for (var i = 0; i < edit.backspaces; i++) {
+        widget.onDelete();
+      }
+      if (edit.text.isNotEmpty) {
+        widget.onInsert(edit.text);
+      }
+    }
+    _updateComposingText();
+    if (_resetPending || _tracker.wantsReset) {
+      _resetWhenPossible();
+    }
+  }
+
+  void _resetWhenPossible() {
+    if (_tracker.isComposing) {
+      _resetPending = true;
       return;
     }
-
-    widget.onComposing(null);
-
-    if (_currentEditingState.text.length < _initEditingState.text.length) {
-      widget.onDelete();
-    } else {
-      final textDelta = _currentEditingState.text.substring(
-        _initEditingState.text.length,
-      );
-
-      widget.onInsert(textDelta);
+    _resetPending = false;
+    if (_tracker.value == _tracker.initialValue) return;
+    _tracker.reset();
+    if (hasInputConnection) {
+      _connection!.setEditingState(_tracker.value);
     }
+  }
 
-    // Reset editing state if composing is done
-    if (_currentEditingState.composing.isCollapsed &&
-        _currentEditingState.text != _initEditingState.text) {
-      _connection!.setEditingState(_initEditingState);
-    }
+  void _updateComposingText() {
+    final text = _tracker.composingText;
+    if (text == _composingText) return;
+    _composingText = text;
+    widget.onComposing(text);
   }
 
   @override
   void performAction(TextInputAction action) {
-    // print('performAction $action');
     widget.onAction(action);
+    if (action == TextInputAction.newline) {
+      _tracker.expectNewlineEcho();
+    }
+    // The line is done.
+    _resetWhenPossible();
   }
 
   @override
@@ -264,7 +329,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void connectionClosed() {
-    // print('connectionClosed');
+    _tracker = TextInputTracker(_initEditingState);
+    _resetPending = false;
+    if (mounted) _updateComposingText();
   }
 
   @override
