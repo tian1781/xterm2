@@ -115,6 +115,20 @@ class ByteConsumer {
     return offset - _currentOffset;
   }
 
+  /// [currentCodeUnitOffset] without first stepping past finished blocks. Only
+  /// valid right after [currentBlock], before anything else is consumed.
+  int get offsetInCurrentBlock => _currentOffset;
+
+  /// [consumeAsciiCodeUnits] for [count] code units the caller has already
+  /// read from [currentBlock] at [offsetInCurrentBlock]: no bounds check, no
+  /// stepping past blocks. The parser's hot path for text and CR / LF.
+  void skipCodeUnitsInCurrentBlock(int count) {
+    _currentOffset += count;
+    _remainingCodeUnits -= count;
+    _totalConsumed += count;
+    _rollbackAvailable += count;
+  }
+
   void consumeAsciiCodeUnits(int count) {
     _advancePastConsumedBlocks();
     final available = _queue.first.data.length - _currentOffset;

@@ -17,6 +17,69 @@ void main() {
     );
   });
 
+  group('CR / LF on the plain-text fast path', () {
+    List<String> texts(Terminal terminal) =>
+        [for (final line in terminal.buffer.lines.toList()) line.toString()];
+
+    test('line breaks split across writes match a single write', () {
+      final whole = Terminal()..resize(10, 4);
+      whole.write('ab\r\ncd\r\n\r\nef');
+
+      final pieces = Terminal()..resize(10, 4);
+      for (final piece in ['ab\r', '\nc', 'd\r\n', '\r', '\ne', 'f']) {
+        pieces.write(piece);
+      }
+
+      expect(texts(pieces), texts(whole));
+      expect(texts(whole), ['ab', 'cd', '', 'ef']);
+      expect(pieces.buffer.cursorX, whole.buffer.cursorX);
+      expect(pieces.buffer.cursorY, whole.buffer.cursorY);
+    });
+
+    test('a bare LF keeps the column, a bare CR returns to it', () {
+      final terminal = Terminal()..resize(10, 3);
+      terminal.write('ab\ncd\rX');
+
+      final line = terminal.buffer.lines[1];
+      expect(line.getCodePoint(0), 'X'.codeUnitAt(0));
+      expect(line.getCodePoint(1), 0);
+      expect(line.getCodePoint(2), 'c'.codeUnitAt(0));
+      expect(line.getCodePoint(3), 'd'.codeUnitAt(0));
+      expect(terminal.buffer.cursorX, 1);
+    });
+
+    test('line feed mode (LNM) still moves to the first column', () {
+      final terminal = Terminal()..resize(10, 3);
+      terminal.write('\x1b[20hab\ncd');
+
+      expect(texts(terminal), ['ab', 'cd', '']);
+    });
+
+    test('escapes, other controls and non-ASCII around line breaks', () {
+      final terminal = Terminal()..resize(10, 3);
+      terminal.write('a\x1b[31mb\x1b[0m\r\n界c\x07d\r\ne');
+
+      expect(texts(terminal), ['ab', '界cd', 'e']);
+      expect(
+        terminal.buffer.lines[0].getForeground(1),
+        CellColor.named | NamedColor.red,
+      );
+      expect(terminal.buffer.lines[2].getForeground(0), 0);
+    });
+
+    test('CR / LF inside an iTerm2 clipboard capture are captured', () {
+      final stores = <(String, String)>[];
+      final terminal = Terminal(
+        onClipboardStore: (selector, text) => stores.add((selector, text)),
+      )..resize(10, 3);
+      terminal.write('\x1b]1337;CopyToClipboard=\x1b\\');
+      terminal.write('a\r\nb\n');
+      terminal.write('\x1b]1337;EndCopy\x1b\\');
+
+      expect(stores, [('c', 'a\r\nb\n')]);
+    });
+  });
+
   test('Terminal batches ASCII across wraps and preserves styled metadata', () {
     final terminal = Terminal()..resize(4, 3);
 

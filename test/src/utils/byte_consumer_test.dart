@@ -130,6 +130,30 @@ void main() {
     consumer.rollback(3);
     expect(_consumeAll(consumer), 'def'.runes);
   });
+
+  test('skips code units read from the current block and can roll them back',
+      () {
+    final consumer = ByteConsumer()
+      ..add('ab')
+      ..add('c\r\n');
+
+    expect(consumer.currentBlock, 'ab');
+    expect(consumer.offsetInCurrentBlock, 0);
+    consumer.skipCodeUnitsInCurrentBlock(2);
+    expect(consumer.totalConsumed, 2);
+
+    // The next read steps into the following block.
+    expect(consumer.currentBlock, 'c\r\n');
+    expect(consumer.offsetInCurrentBlock, 0);
+    consumer.skipCodeUnitsInCurrentBlock(1);
+    expect(consumer.offsetInCurrentBlock, 1);
+    consumer.skipCodeUnitsInCurrentBlock(2);
+    expect(consumer, isEmpty);
+    expect(consumer.totalConsumed, 5);
+
+    consumer.rollback(4);
+    expect(_consumeAll(consumer), 'bc\r\n'.runes);
+  });
 }
 
 List<int> _consumeAll(ByteConsumer consumer) {

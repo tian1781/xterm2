@@ -113,13 +113,31 @@ class EscapeParser {
       }
 
       if (handler case final EscapeTextHandler textHandler) {
-        final runLength = _queue.printableAsciiRunLength;
-        if (runLength > 0) {
+        // Hot path for plain output: a run of printable ASCII, or the CR / LF
+        // that ends a line, read straight from the current block.
+        final data = _queue.currentBlock;
+        final start = _queue.offsetInCurrentBlock;
+        var end = start;
+        while (end < data.length) {
+          final codeUnit = data.codeUnitAt(end);
+          if (codeUnit < 0x20 || codeUnit > 0x7e) break;
+          end++;
+        }
+        if (end > start) {
           tokenBegin = _queue.totalConsumed;
-          final data = _queue.currentBlock;
-          final start = _queue.currentCodeUnitOffset;
-          _queue.consumeAsciiCodeUnits(runLength);
-          textHandler.writeText(data, start, start + runLength);
+          _queue.skipCodeUnitsInCurrentBlock(end - start);
+          textHandler.writeText(data, start, end);
+          continue;
+        }
+        final codeUnit = data.codeUnitAt(start);
+        if (codeUnit == Ascii.CR || codeUnit == Ascii.LF) {
+          tokenBegin = _queue.totalConsumed;
+          _queue.skipCodeUnitsInCurrentBlock(1);
+          if (codeUnit == Ascii.CR) {
+            handler.carriageReturn();
+          } else {
+            handler.lineFeed();
+          }
           continue;
         }
       }
