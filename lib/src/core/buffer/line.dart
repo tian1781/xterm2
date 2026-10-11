@@ -714,6 +714,30 @@ class BufferLine with IndexedItem {
     return builder.toString();
   }
 
+  static var _zeroCells = Uint32List(0);
+
+  /// Clears this line so it can stand in for a fresh `BufferLine(length)`.
+  ///
+  /// Returns false and leaves the line untouched when it cannot: it still has
+  /// anchors (reusing it would re-attach them somewhere else), or its storage
+  /// was sized for a different width.
+  bool resetForReuse(int length) {
+    if (_anchors.isNotEmpty) return false;
+    if (_data.length != _calcCapacity(length) * _cellSize) return false;
+    // Copying the whole storage from a zeroed list goes through memmove;
+    // fillRange (and short setRange copies) are element loops that cost more
+    // than the allocation this replaces.
+    if (_zeroCells.length < _data.length) {
+      _zeroCells = Uint32List(_data.length);
+    }
+    _data.setRange(0, _data.length, _zeroCells);
+    _length = length;
+    isWrapped = false;
+    _combiningCharacters = null;
+    _underlineColors = null;
+    return true;
+  }
+
   CellAnchor createAnchor(int offset) {
     final anchor = CellAnchor(offset, owner: this);
     _anchors.add(anchor);

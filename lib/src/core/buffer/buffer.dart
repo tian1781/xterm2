@@ -961,7 +961,12 @@ class Buffer {
       if (!isInHorizontalMarginOrPendingWrap) return;
       if (_cursorY == _marginBottom) {
         if (marginTop == 0 && !isAltBuffer) {
-          lines.insert(absoluteMarginBottom + 1, _newEmptyLine());
+          final insertAt = absoluteMarginBottom + 1;
+          if (insertAt == lines.length) {
+            _pushEmptyLine();
+          } else {
+            lines.insert(insertAt, _newEmptyLine());
+          }
         } else {
           scrollUp(1);
         }
@@ -977,7 +982,7 @@ class Buffer {
       if (isAltBuffer) {
         scrollUp(1);
       } else {
-        lines.push(_newEmptyLine());
+        _pushEmptyLine();
       }
     } else {
       // there're still lines so we simply move cursor down.
@@ -1702,6 +1707,22 @@ class Buffer {
   BufferLine _newEmptyLine([int? width]) {
     final line = BufferLine(width ?? viewWidth);
     return line;
+  }
+
+  /// Appends an empty line at the bottom. Once the scrollback is full the
+  /// oldest line falls off the top; its storage is reused for the new line
+  /// instead of allocating one per line feed — otherwise a flood of output
+  /// allocates a line per line feed and leaves every scrolled-off one to the
+  /// GC. Lines that still carry anchors are never reused.
+  void _pushEmptyLine() {
+    if (lines.isFull) {
+      final oldest = lines[0];
+      if (oldest.resetForReuse(viewWidth)) {
+        lines.push(oldest);
+        return;
+      }
+    }
+    lines.push(_newEmptyLine());
   }
 
   static final defaultWordSeparators = <int>{

@@ -539,4 +539,117 @@ void main() {
       expect(terminal.buffer.lines[2].toString(), '789');
     });
   });
+
+  group('lines falling off a full scrollback are reused', () {
+    /// A terminal whose scrollback is already full (it starts at 24 rows, so
+    /// it holds 24 lines even after shrinking to [rows]).
+    Terminal filled({int cols = 10, int rows = 3, bool reflow = true}) {
+      final terminal = Terminal(maxLines: 5, reflowEnabled: reflow)
+        ..resize(cols, rows);
+      for (var i = 0; i < 40; i++) {
+        terminal.write('$i\r\n');
+      }
+      terminal.write('end');
+      expect(terminal.buffer.lines.isFull, isTrue);
+      return terminal;
+    }
+
+    BufferLine last(Terminal terminal) =>
+        terminal.buffer.lines[terminal.buffer.lines.length - 1];
+
+    test('a line feed at the bottom reuses the line that falls off the top',
+        () {
+      final terminal = filled();
+      final oldest = terminal.buffer.lines[0];
+      final second = terminal.buffer.lines[1].toString();
+
+      terminal.write('\r\nnext');
+
+      expect(last(terminal), same(oldest));
+      expect(oldest.toString(), 'next');
+      expect(terminal.buffer.lines[0].toString(), second);
+      expect(terminal.buffer.lines[terminal.buffer.lines.length - 2].toString(),
+          'end');
+    });
+
+    test('the same holds with an explicit full-screen scroll region', () {
+      final terminal = filled();
+      terminal.write('\x1b[1;3r\x1b[3;1H');
+      final oldest = terminal.buffer.lines[0];
+
+      terminal.write('\r\nnext');
+
+      expect(last(terminal), same(oldest));
+      expect(oldest.toString(), 'next');
+    });
+
+    test('a reused line starts out blank', () {
+      // Lines from before the resize are sized for 80 columns and are never
+      // reused; scroll them all out so the line written next is a 4-column one.
+      final terminal = filled(cols: 4);
+      terminal.write('\r\n');
+      // Colors, a wide glyph, a combining mark, an underline color and a soft
+      // wrap: everything a line can carry.
+      terminal.write('\x1b[31;44;4m\x1b[58;5;3m界e\u0301xyz\x1b[0m');
+      final wrapped = terminal.buffer.currentLine;
+      expect(wrapped.isWrapped, isTrue);
+      final firstDirty =
+          terminal.buffer.lines[terminal.buffer.absoluteCursorY - 1];
+      expect(firstDirty.hasCombiningCharacters, isTrue);
+      expect(firstDirty.getUnderlineColor(0), isNot(0));
+
+      while (!identical(terminal.buffer.lines[0], firstDirty)) {
+        terminal.write('\r\nx');
+      }
+      terminal.write('\r\nr');
+
+      final reused = last(terminal);
+      expect(reused, same(firstDirty));
+      expect(reused.toString(), 'r');
+      expect(reused.isWrapped, isFalse);
+      expect(reused.hasCombiningCharacters, isFalse);
+      expect(reused.getUnderlineColor(0), 0);
+      for (var i = 1; i < reused.length; i++) {
+        expect(reused.getContent(i), 0, reason: 'cell $i');
+        expect(reused.getForeground(i), 0, reason: 'cell $i');
+        expect(reused.getBackground(i), 0, reason: 'cell $i');
+        expect(reused.getAttributes(i), 0, reason: 'cell $i');
+        expect(reused.getUnderlineColor(i), 0, reason: 'cell $i');
+      }
+      expect(reused.data.skip(4), everyElement(0));
+
+      // The wrapped half is reused next, also as a plain unwrapped line.
+      terminal.write('\r\ns');
+      expect(last(terminal), same(wrapped));
+      expect(wrapped.isWrapped, isFalse);
+      expect(wrapped.toString(), 's');
+    });
+
+    test('a line still holding an anchor is left alone', () {
+      final terminal = filled();
+      final oldest = terminal.buffer.lines[0];
+      final text = oldest.toString();
+      final anchor = terminal.buffer.createAnchor(0, 0);
+
+      terminal.write('\r\nnext');
+
+      expect(anchor.attached, isFalse);
+      expect(anchor.line, same(oldest));
+      expect(oldest.toString(), text);
+      expect(last(terminal), isNot(same(oldest)));
+      expect(last(terminal).toString(), 'next');
+    });
+
+    test('a line sized for another width is not reused', () {
+      final terminal = filled(cols: 300, reflow: false);
+      terminal.resize(4, 3);
+      final oldest = terminal.buffer.lines[0];
+
+      terminal.write('\r\nnext');
+
+      expect(last(terminal), isNot(same(oldest)));
+      expect(last(terminal).length, 4);
+      expect(last(terminal).toString(), 'next');
+    });
+  });
 }
