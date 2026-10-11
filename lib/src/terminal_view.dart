@@ -126,6 +126,7 @@ class TerminalView extends StatefulWidget {
     this.readOnly = false,
     this.hardwareKeyboardOnly = false,
     this.simulateScroll = true,
+    this.lineMask,
   });
 
   /// The underlying terminal that this widget renders.
@@ -196,6 +197,12 @@ class TerminalView extends StatefulWidget {
 
   /// The type of cursor to use. [TerminalCursorType.block] by default.
   final TerminalCursorType cursorType;
+
+  /// Called for every visible line while painting; returns the cell columns
+  /// whose glyphs are drawn as `*` (or `＊` for wide cells) instead of their
+  /// content. The buffer is not touched, so selection, copy and search still
+  /// see the real text. `null` (the default) skips masking entirely.
+  final TerminalLineMask? lineMask;
 
   /// Whether to always show the cursor. This is useful for debugging.
   /// [false] by default.
@@ -461,6 +468,7 @@ class TerminalViewState extends State<TerminalView> {
           activeHyperlinkId: _activeHyperlinkId,
           onEditableRect: _onEditableRect,
           composingText: _composingText,
+          lineMask: widget.lineMask,
         );
       },
     );
@@ -924,6 +932,7 @@ class _TerminalView extends LeafRenderObjectWidget {
     this.activeHyperlinkId,
     this.onEditableRect,
     this.composingText,
+    this.lineMask,
   });
 
   final Terminal terminal;
@@ -956,6 +965,8 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final String? composingText;
 
+  final TerminalLineMask? lineMask;
+
   @override
   RenderTerminal createRenderObject(BuildContext context) {
     return RenderTerminal(
@@ -974,6 +985,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       activeHyperlinkId: activeHyperlinkId,
       onEditableRect: onEditableRect,
       composingText: composingText,
+      lineMask: lineMask,
     );
   }
 
@@ -994,6 +1006,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..alwaysShowCursor = alwaysShowCursor
       ..activeHyperlinkId = activeHyperlinkId
       ..onEditableRect = onEditableRect
-      ..composingText = composingText;
+      ..composingText = composingText
+      ..lineMask = lineMask;
   }
 }

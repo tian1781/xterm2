@@ -10,6 +10,15 @@ import 'package:xterm2/src/core/buffer/range_line.dart';
 import 'package:xterm2/src/ui/pointer_input.dart';
 import 'package:xterm2/src/ui/selection_mode.dart';
 
+/// Returns the cell columns of [line] to paint masked, as a flat list of
+/// half-open `[start, end)` pairs sorted by start: `[0, 4, 5, 12]` masks
+/// columns 0-3 and 5-11. Return `null` or an empty list for no masking.
+///
+/// Masked cells keep their colours and attributes; only the glyph changes to
+/// `*` (narrow cells) or `＊` (wide cells), so the column count never shifts.
+/// Used by [TerminalView.lineMask] for screen-sharing privacy.
+typedef TerminalLineMask = List<int>? Function(BufferLine line);
+
 class TerminalController with ChangeNotifier {
   TerminalController({
     SelectionMode selectionMode = SelectionMode.line,

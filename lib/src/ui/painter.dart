@@ -414,10 +414,16 @@ class TerminalPainter {
     Color? cursorForeground,
     Color? foregroundOverride,
     bool ensureSelectionContrast = false,
+    List<int>? maskRanges,
   }) {
     final cellData = CellData.empty();
     final cellWidth = _cellSize.width;
     final hasCombiningCharacters = line.hasCombiningCharacters;
+    final masks = switch (maskRanges != null && maskRanges.length >= 2) {
+      true => maskRanges,
+      false => null,
+    };
+    var maskIndex = 0;
     var hasBlinkingText = false;
     for (var i = 0; i < line.length; i++) {
       line.getCellData(i, cellData);
@@ -430,6 +436,22 @@ class TerminalPainter {
         continue;
       }
 
+      var masked = false;
+      if (masks != null) {
+        while (maskIndex + 1 < masks.length && masks[maskIndex + 1] <= i) {
+          maskIndex += 2;
+        }
+        if (maskIndex + 1 < masks.length && masks[maskIndex] <= i) {
+          masked = true;
+          final maskChar = switch (charWidth == 2) {
+            true => 0xFF0A,
+            false => 0x2A,
+          };
+          cellData.content =
+              (cellData.content & ~CellContent.codepointMask) | maskChar;
+        }
+      }
+
       final cellOffset = offset.translate(i * cellWidth, 0);
       if (cellData.flags & CellFlags.blink != 0) {
         hasBlinkingText = true;
@@ -439,11 +461,14 @@ class TerminalPainter {
         canvas,
         cellOffset,
         cellData,
-        combiningCharacters: switch (hasCombiningCharacters) {
+        combiningCharacters: switch (hasCombiningCharacters && !masked) {
           true => line.getCombiningCharacters(i),
           false => null,
         },
-        glyphCellSpan: glyphConstraintCellSpan(line, i),
+        glyphCellSpan: switch (masked) {
+          true => null,
+          false => glyphConstraintCellSpan(line, i),
+        },
         blinkVisible: blinkVisible,
         activeHyperlinkId: activeHyperlinkId,
         foregroundOverride: switch (i == cursorColumn) {

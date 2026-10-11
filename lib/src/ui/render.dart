@@ -41,6 +41,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     int? activeHyperlinkId,
     EditableRectCallback? onEditableRect,
     String? composingText,
+    TerminalLineMask? lineMask,
   })  : _terminal = terminal,
         _controller = controller,
         _offset = offset,
@@ -53,6 +54,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         _activeHyperlinkId = activeHyperlinkId,
         _onEditableRect = onEditableRect,
         _composingText = composingText,
+        _lineMask = lineMask,
         _painter = TerminalPainter(
           theme: theme,
           textStyle: textStyle,
@@ -172,6 +174,28 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (value == _composingText) return;
     _composingText = value;
     markNeedsPaint();
+  }
+
+  /// See [TerminalView.lineMask].
+  TerminalLineMask? get lineMask => _lineMask;
+  TerminalLineMask? _lineMask;
+  set lineMask(TerminalLineMask? value) {
+    if (value == _lineMask) return;
+    _lineMask = value;
+    markNeedsPaint();
+  }
+
+  /// Mask ranges of the lines painted in the current frame, indexed from the
+  /// first visible line. Only built when [lineMask] is set.
+  List<List<int>?>? _frameMasks;
+  int _frameMaskFirstLine = 0;
+
+  List<int>? _maskFor(int line) {
+    final masks = _frameMasks;
+    if (masks == null) return null;
+    final index = line - _frameMaskFirstLine;
+    if (index < 0 || index >= masks.length) return null;
+    return masks[index];
   }
 
   TerminalSize? _viewportSize;
@@ -728,6 +752,17 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       charHeight,
     );
 
+    final lineMask = _lineMask;
+    if (lineMask == null) {
+      _frameMasks = null;
+    } else {
+      _frameMaskFirstLine = effectFirstLine;
+      _frameMasks = [
+        for (var i = effectFirstLine; i <= effectLastLine; i++)
+          lineMask(lines[i]),
+      ];
+    }
+
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
       _painter.paintLineBackgrounds(
         canvas,
@@ -826,6 +861,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
               false => null,
             },
             cursorForeground: cursorForeground,
+            maskRanges: _maskFor(i),
           ) ||
           hasBlinkingText;
     }
@@ -1107,6 +1143,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         cursorForeground: cursorForeground,
         foregroundOverride: foreground,
         ensureSelectionContrast: true,
+        maskRanges: _maskFor(segment.line),
       );
       canvas.restore();
     }
@@ -1227,6 +1264,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         cursorForeground: cursorForeground,
         foregroundOverride: _painter.searchHitForegroundColor,
         ensureSelectionContrast: true,
+        maskRanges: _maskFor(line),
       );
     }
     canvas.restore();
